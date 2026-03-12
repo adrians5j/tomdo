@@ -1,6 +1,6 @@
 import { Action, ActionPanel, List, showToast, Toast, Icon } from "@raycast/api";
 import { useEffect, useState } from "react";
-import { readTodos, toggleTodo, TodoItem, CATEGORIES } from "./utils";
+import { readTodos, updateTodoStatus, cycleStatus, TodoItem, CATEGORIES, STATUSES, TodoStatus } from "./utils";
 
 export default function ManageTasks() {
   const [todos, setTodos] = useState<TodoItem[]>([]);
@@ -26,21 +26,59 @@ export default function ManageTasks() {
     loadTodos();
   }, []);
 
-  async function handleToggle(todo: TodoItem) {
+  async function handleCycleStatus(todo: TodoItem) {
     try {
-      toggleTodo(todo);
+      const newStatus = cycleStatus(todo.status);
+      updateTodoStatus(todo, newStatus);
+      const statusObj = STATUSES.find((s) => s.value === newStatus);
       await showToast({
         style: Toast.Style.Success,
-        title: todo.done ? "Marked as not done" : "Marked as done",
+        title: `Status changed to ${statusObj?.title || newStatus}`,
       });
       loadTodos();
     } catch (error) {
       await showToast({
         style: Toast.Style.Failure,
-        title: "Failed to toggle task",
+        title: "Failed to update status",
         message: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  async function handleSetStatus(todo: TodoItem, newStatus: TodoStatus) {
+    try {
+      updateTodoStatus(todo, newStatus);
+      const statusObj = STATUSES.find((s) => s.value === newStatus);
+      await showToast({
+        style: Toast.Style.Success,
+        title: `Status changed to ${statusObj?.title || newStatus}`,
+      });
+      loadTodos();
+    } catch (error) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Failed to update status",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  function getStatusIcon(status: TodoStatus): Icon {
+    switch (status) {
+      case "done":
+        return Icon.CheckCircle;
+      case "in_progress":
+        return Icon.CircleProgress;
+      case "blocked":
+        return Icon.XMarkCircle;
+      default:
+        return Icon.Circle;
+    }
+  }
+
+  function getStatusText(status: TodoStatus): string {
+    const statusObj = STATUSES.find((s) => s.value === status);
+    return statusObj?.title || status;
   }
 
   const filteredTodos =
@@ -82,15 +120,25 @@ export default function ManageTasks() {
               {items.map((todo, index) => (
                 <List.Item
                   key={`${category}-${index}`}
-                  icon={todo.done ? Icon.CheckCircle : Icon.Circle}
+                  icon={getStatusIcon(todo.status)}
                   title={todo.text}
-                  accessories={[{ text: todo.done ? "Done" : "Not Done" }]}
+                  accessories={[{ text: getStatusText(todo.status) }]}
                   actions={
                     <ActionPanel>
                       <Action
-                        title={todo.done ? "Mark as Not Done" : "Mark as Done"}
-                        onAction={() => handleToggle(todo)}
+                        title="Cycle Status (Todo → In Progress → Done)"
+                        onAction={() => handleCycleStatus(todo)}
                       />
+                      <ActionPanel.Section title="Set Status">
+                        {STATUSES.map((status) => (
+                          <Action
+                            key={status.value}
+                            title={`Set as ${status.title}`}
+                            icon={status.icon}
+                            onAction={() => handleSetStatus(todo, status.value)}
+                          />
+                        ))}
+                      </ActionPanel.Section>
                     </ActionPanel>
                   }
                 />
@@ -100,12 +148,22 @@ export default function ManageTasks() {
         : filteredTodos.map((todo, index) => (
             <List.Item
               key={index}
-              icon={todo.done ? Icon.CheckCircle : Icon.Circle}
+              icon={getStatusIcon(todo.status)}
               title={todo.text}
-              accessories={[{ text: todo.done ? "Done" : "Not Done" }]}
+              accessories={[{ text: getStatusText(todo.status) }]}
               actions={
                 <ActionPanel>
-                  <Action title={todo.done ? "Mark as Not Done" : "Mark as Done"} onAction={() => handleToggle(todo)} />
+                  <Action title="Cycle Status (Todo → In Progress → Done)" onAction={() => handleCycleStatus(todo)} />
+                  <ActionPanel.Section title="Set Status">
+                    {STATUSES.map((status) => (
+                      <Action
+                        key={status.value}
+                        title={`Set as ${status.title}`}
+                        icon={status.icon}
+                        onAction={() => handleSetStatus(todo, status.value)}
+                      />
+                    ))}
+                  </ActionPanel.Section>
                 </ActionPanel>
               }
             />
