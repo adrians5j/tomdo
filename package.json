@@ -18,7 +18,14 @@
       "name": "create-task",
       "title": "Create Task",
       "subtitle": "mdtodo",
-      "description": "Quickly create a new todo item",
+      "description": "Create a new todo item with category",
+      "mode": "view"
+    },
+    {
+      "name": "manage-tasks",
+      "title": "Manage Tasks",
+      "subtitle": "mdtodo",
+      "description": "View and manage todo items",
       "mode": "view"
     },
     {
@@ -29,11 +36,11 @@
       "mode": "no-view"
     },
     {
-      "name": "manage-tasks",
-      "title": "Manage Tasks",
+      "name": "flush-completed-tasks",
+      "title": "Archive Completed Tasks",
       "subtitle": "mdtodo",
-      "description": "View and toggle todo items",
-      "mode": "view"
+      "description": "Move all completed tasks to the Completed section",
+      "mode": "no-view"
     }
   ],
   "dependencies": {

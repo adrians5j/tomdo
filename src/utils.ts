@@ -9,6 +9,9 @@ export interface TodoItem {
   status: TodoStatus;
   line: number;
   category?: string;
+  completedAt?: string;
+  isArchived?: boolean;
+  modifiedAt?: string;
 }
 
 // Task statuses with GitHub-style checkboxes
@@ -31,6 +34,9 @@ export const CATEGORIES = [
   { value: "build", title: "build", description: "Build system" },
   { value: "ci", title: "ci", description: "CI/CD" },
   { value: "chore", title: "chore", description: "Other changes" },
+  { value: "bip", title: "bip", description: "Build in public" },
+  { value: "client", title: "client", description: "Client work" },
+  { value: "release", title: "release", description: "Release tasks" },
 ] as const;
 
 export function getTodoFilePath(): string {
@@ -54,14 +60,23 @@ export function readTodos(): TodoItem[] {
   const content = readFileSync(filePath, "utf-8");
   const lines = content.split("\n");
   const todos: TodoItem[] = [];
+  let inCompletedSection = false;
 
   lines.forEach((line, index) => {
-    // Match any checkbox pattern
-    const checkboxMatch = line.match(/^- \[(.)\] (.+)$/);
+    // Check if we're entering the Completed section
+    if (line.trim() === "## Completed") {
+      inCompletedSection = true;
+      return;
+    }
+
+    // Match any checkbox pattern, optionally with timestamps
+    const checkboxMatch = line.match(/^- \[(.)\] (.+?)(?:\s+\[completed:\s*(.+?)\])?(?:\s+\[modified:\s*(.+?)\])?$/);
 
     if (checkboxMatch) {
       const checkboxChar = checkboxMatch[1];
       const fullText = checkboxMatch[2];
+      const completedAt = checkboxMatch[3];
+      const modifiedAt = checkboxMatch[4];
       const { category } = parseCategory(fullText);
 
       // Determine status based on checkbox character
@@ -76,12 +91,19 @@ export function readTodos(): TodoItem[] {
         status = "todo";
       }
 
-      todos.push({
-        text: fullText,
-        status,
-        line: index,
-        category,
-      });
+      // Only include tasks that have a valid category
+      const validCategories = CATEGORIES.map((c) => c.value);
+      if (category && validCategories.includes(category)) {
+        todos.push({
+          text: fullText,
+          status,
+          line: index,
+          category,
+          completedAt,
+          modifiedAt,
+          isArchived: inCompletedSection,
+        });
+      }
     }
   });
 
@@ -99,15 +121,116 @@ function parseCategory(text: string): { category?: string; text: string } {
   return { text };
 }
 
+function ensureCompletedSection(): void {
+  const filePath = getTodoFilePath();
+  const content = readFileSync(filePath, "utf-8");
+
+  if (!content.includes("## Completed")) {
+    writeFileSync(filePath, content + "\n\n## Completed\n\n", "utf-8");
+  }
+}
+
 export function addTodo(text: string, category?: string, status: TodoStatus = "todo"): void {
   ensureTodoFileExists();
   const filePath = getTodoFilePath();
   const content = readFileSync(filePath, "utf-8");
+  const lines = content.split("\n");
+
+  // Find where to insert (before ## Completed section if it exists)
+  let insertIndex = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() === "## Completed") {
+      insertIndex = i;
+      break;
+    }
+  }
+
   const todoText = category ? `${category}: ${text}` : text;
   const statusObj = STATUSES.find((s) => s.value === status);
   const checkbox = statusObj ? statusObj.checkbox : "[ ]";
-  const newTodo = `- ${checkbox} ${todoText}\n`;
-  writeFileSync(filePath, content + newTodo, "utf-8");
+  const newTodo = `- ${checkbox} ${todoText}`;
+
+  lines.splice(insertIndex, 0, newTodo);
+  writeFileSync(filePath, lines.join("\n"), "utf-8");
+  reorganizeFile();
+}
+
+// Reorganize and sort the entire file
+function reorganizeFile(): void {
+  const filePath = getTodoFilePath();
+  const content = readFileSync(filePath, "utf-8");
+  const lines = content.split("\n");
+
+  const activeTasks: string[] = [];
+  const completedTasks: string[] = [];
+  const noLongerRelevantTasks: string[] = [];
+  const rejectedTasks: string[] = [];
+  let currentSection = "active";
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+
+    if (trimmed === "## Completed") {
+      currentSection = "completed";
+      return;
+    }
+    if (trimmed === "## No Longer Relevant") {
+      currentSection = "nolonger";
+      return;
+    }
+    if (trimmed === "## Rejected") {
+      currentSection = "rejected";
+      return;
+    }
+    if (trimmed.startsWith("# ")) {
+      return; // Skip header
+    }
+    if (trimmed === "") {
+      return; // Skip empty lines
+    }
+
+    // Parse task lines based on current section
+    if (line.match(/^- \[.\] /)) {
+      if (currentSection === "active") {
+        activeTasks.push(line);
+      } else if (currentSection === "completed") {
+        completedTasks.push(line);
+      }
+    } else if (line.match(/^- /)) {
+      if (currentSection === "nolonger") {
+        noLongerRelevantTasks.push(line);
+      } else if (currentSection === "rejected") {
+        rejectedTasks.push(line);
+      }
+    }
+  });
+
+  // Sort active tasks alphabetically
+  activeTasks.sort((a, b) => a.localeCompare(b));
+
+  // Sort completed tasks by date (newest first)
+  completedTasks.sort((a, b) => {
+    const dateA = a.match(/\[completed:\s*(.+?)\]/)?.[1] || "";
+    const dateB = b.match(/\[completed:\s*(.+?)\]/)?.[1] || "";
+    return dateB.localeCompare(dateA);
+  });
+
+  // Rebuild file
+  const result = ["# My Todos", "", ...activeTasks];
+
+  if (completedTasks.length > 0) {
+    result.push("", "## Completed", "", ...completedTasks);
+  }
+
+  if (noLongerRelevantTasks.length > 0) {
+    result.push("", "## No Longer Relevant", "", ...noLongerRelevantTasks);
+  }
+
+  if (rejectedTasks.length > 0) {
+    result.push("", "## Rejected", "", ...rejectedTasks);
+  }
+
+  writeFileSync(filePath, result.join("\n"), "utf-8");
 }
 
 export function updateTodoStatus(todo: TodoItem, newStatus: TodoStatus): void {
@@ -120,6 +243,7 @@ export function updateTodoStatus(todo: TodoItem, newStatus: TodoStatus): void {
     const checkbox = statusObj ? statusObj.checkbox : "[ ]";
     lines[todo.line] = `- ${checkbox} ${todo.text}`;
     writeFileSync(filePath, lines.join("\n"), "utf-8");
+    reorganizeFile();
   }
 }
 
@@ -129,4 +253,143 @@ export function cycleStatus(currentStatus: TodoStatus): TodoStatus {
   const currentIndex = statusOrder.indexOf(currentStatus);
   const nextIndex = (currentIndex + 1) % statusOrder.length;
   return statusOrder[nextIndex];
+}
+
+// Archive a completed task to the Completed section
+export function archiveCompletedTask(todo: TodoItem): void {
+  ensureTodoFileExists();
+  ensureCompletedSection();
+  const filePath = getTodoFilePath();
+  const content = readFileSync(filePath, "utf-8");
+  const lines = content.split("\n");
+
+  if (todo.line >= lines.length) return;
+
+  // Get the task line
+  const taskLine = lines[todo.line];
+
+  // Add timestamp
+  const now = new Date();
+  const timestamp = now.toISOString().split("T")[0] + " " + now.toTimeString().split(" ")[0];
+  const archivedTask = `- [x] ${todo.text} [completed: ${timestamp}]`;
+
+  // Remove from current position
+  lines.splice(todo.line, 1);
+
+  // Find the Completed section and add there
+  let completedIndex = lines.findIndex((line) => line.trim() === "## Completed");
+  if (completedIndex === -1) {
+    // Should not happen due to ensureCompletedSection, but just in case
+    lines.push("", "## Completed", "");
+    completedIndex = lines.length - 1;
+  }
+
+  // Insert after the ## Completed header (skip empty lines)
+  let insertIndex = completedIndex + 1;
+  while (insertIndex < lines.length && lines[insertIndex].trim() === "") {
+    insertIndex++;
+  }
+
+  lines.splice(insertIndex, 0, archivedTask);
+  writeFileSync(filePath, lines.join("\n"), "utf-8");
+  reorganizeFile();
+}
+
+// Remove all completed tasks from active section and move to Completed
+export function archiveAllCompletedTasks(): number {
+  ensureTodoFileExists();
+  ensureCompletedSection();
+  const filePath = getTodoFilePath();
+  const content = readFileSync(filePath, "utf-8");
+  const lines = content.split("\n");
+
+  const completedSectionIndex = lines.findIndex((line) => line.trim() === "## Completed");
+  const activeTodos: string[] = [];
+  const completedTasks: string[] = [];
+  let archivedCount = 0;
+
+  const now = new Date();
+  const timestamp = now.toISOString().split("T")[0] + " " + now.toTimeString().split(" ")[0];
+
+  // Process lines before Completed section
+  for (let i = 0; i < completedSectionIndex; i++) {
+    const line = lines[i];
+    const checkboxMatch = line.match(/^- \[(.)\] (.+)$/);
+
+    if (checkboxMatch && checkboxMatch[1].toLowerCase() === "x") {
+      // This is a completed task - archive it
+      completedTasks.push(`- [x] ${checkboxMatch[2]} [completed: ${timestamp}]`);
+      archivedCount++;
+    } else {
+      activeTodos.push(line);
+    }
+  }
+
+  // Combine: active section + completed section with new tasks
+  const result = [...activeTodos, "", "## Completed", "", ...completedTasks, ...lines.slice(completedSectionIndex + 1)];
+
+  writeFileSync(filePath, result.join("\n"), "utf-8");
+  return archivedCount;
+}
+
+// Move task to "No Longer Relevant" section
+export function markAsNoLongerRelevant(todo: TodoItem): void {
+  ensureTodoFileExists();
+  const filePath = getTodoFilePath();
+  const content = readFileSync(filePath, "utf-8");
+  const lines = content.split("\n");
+
+  if (todo.line >= lines.length) return;
+
+  // Remove from current position
+  lines.splice(todo.line, 1);
+
+  // Ensure "No Longer Relevant" section exists
+  let sectionIndex = lines.findIndex((line) => line.trim() === "## No Longer Relevant");
+  if (sectionIndex === -1) {
+    // Add section at the end
+    lines.push("", "## No Longer Relevant", "");
+    sectionIndex = lines.length - 1;
+  }
+
+  // Insert after the section header
+  let insertIndex = sectionIndex + 1;
+  while (insertIndex < lines.length && lines[insertIndex].trim() === "") {
+    insertIndex++;
+  }
+
+  lines.splice(insertIndex, 0, `- ${todo.text}`);
+  writeFileSync(filePath, lines.join("\n"), "utf-8");
+  reorganizeFile();
+}
+
+// Move task to "Rejected" section
+export function markAsRejected(todo: TodoItem): void {
+  ensureTodoFileExists();
+  const filePath = getTodoFilePath();
+  const content = readFileSync(filePath, "utf-8");
+  const lines = content.split("\n");
+
+  if (todo.line >= lines.length) return;
+
+  // Remove from current position
+  lines.splice(todo.line, 1);
+
+  // Ensure "Rejected" section exists
+  let sectionIndex = lines.findIndex((line) => line.trim() === "## Rejected");
+  if (sectionIndex === -1) {
+    // Add section at the end
+    lines.push("", "## Rejected", "");
+    sectionIndex = lines.length - 1;
+  }
+
+  // Insert after the section header
+  let insertIndex = sectionIndex + 1;
+  while (insertIndex < lines.length && lines[insertIndex].trim() === "") {
+    insertIndex++;
+  }
+
+  lines.splice(insertIndex, 0, `- ${todo.text}`);
+  writeFileSync(filePath, lines.join("\n"), "utf-8");
+  reorganizeFile();
 }

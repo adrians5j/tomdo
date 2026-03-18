@@ -1,20 +1,18 @@
 import { Action, ActionPanel, Form, showToast, Toast, popToRoot } from "@raycast/api";
 import { useState } from "react";
-import { addTodo, CATEGORIES, STATUSES, TodoStatus } from "./utils";
+import { addTodo, CATEGORIES } from "./utils";
 
 interface FormValues {
   task: string;
-  category: string;
-  status: TodoStatus;
 }
 
 export default function CreateTask() {
   const [task, setTask] = useState("");
-  const [category, setCategory] = useState("");
-  const [status, setStatus] = useState<TodoStatus>("todo");
 
   async function handleSubmit(values: FormValues) {
-    if (!values.task.trim()) {
+    const trimmed = values.task.trim();
+
+    if (!trimmed) {
       await showToast({
         style: Toast.Style.Failure,
         title: "Task cannot be empty",
@@ -22,14 +20,44 @@ export default function CreateTask() {
       return;
     }
 
+    // Validate category prefix format
+    const match = trimmed.match(/^(\w+):\s*(.+)$/);
+    if (!match) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Invalid format",
+        message: "Task must start with category prefix (e.g., fix: bug description)",
+      });
+      return;
+    }
+
+    const [, category, taskText] = match;
+    const validCategories = CATEGORIES.map((c) => c.value);
+
+    if (!validCategories.includes(category)) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Invalid category",
+        message: `"${category}" is not valid. Use: ${validCategories.join(", ")}`,
+      });
+      return;
+    }
+
+    if (!taskText.trim()) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Task description required",
+        message: "Add text after the category prefix",
+      });
+      return;
+    }
+
     try {
-      const categoryValue = values.category || undefined;
-      addTodo(values.task, categoryValue, values.status);
-      const displayText = categoryValue ? `${categoryValue}: ${values.task}` : values.task;
+      addTodo(taskText.trim(), category, "todo");
       await showToast({
         style: Toast.Style.Success,
-        title: "Task added",
-        message: displayText,
+        title: "Task created",
+        message: `${category}: ${taskText}`,
       });
       popToRoot();
     } catch (error) {
@@ -45,31 +73,14 @@ export default function CreateTask() {
     <Form
       actions={
         <ActionPanel>
-          <Action.SubmitForm title="Add Task" onSubmit={handleSubmit} />
+          <Action.SubmitForm title="Create Task" onSubmit={handleSubmit} />
         </ActionPanel>
       }
     >
-      <Form.Dropdown
-        id="status"
-        title="Status"
-        value={status}
-        onChange={(val) => setStatus(val as TodoStatus)}
-        storeValue
-      >
-        {STATUSES.map((s) => (
-          <Form.Dropdown.Item key={s.value} value={s.value} title={s.title} icon={s.icon} />
-        ))}
-      </Form.Dropdown>
-      <Form.Dropdown id="category" title="Category" value={category} onChange={setCategory} storeValue>
-        <Form.Dropdown.Item value="" title="No Category" />
-        {CATEGORIES.map((cat) => (
-          <Form.Dropdown.Item key={cat.value} value={cat.value} title={cat.title} icon="📁" />
-        ))}
-      </Form.Dropdown>
       <Form.TextField
         id="task"
         title="Task"
-        placeholder="Enter your todo item"
+        placeholder="category: task description (e.g., fix: bug in header)"
         value={task}
         onChange={setTask}
         autoFocus
