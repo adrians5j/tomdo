@@ -42,22 +42,12 @@ export default function ManageTasks() {
   async function handleCycleStatus(todo: TodoItem) {
     try {
       const newStatus = cycleStatus(todo.status);
-
-      // If cycling to "done", archive it instead
-      if (newStatus === "done") {
-        archiveCompletedTask(todo);
-        await showToast({
-          style: Toast.Style.Success,
-          title: "Task completed and archived",
-        });
-      } else {
-        updateTodoStatus(todo, newStatus);
-        const statusObj = STATUSES.find((s) => s.value === newStatus);
-        await showToast({
-          style: Toast.Style.Success,
-          title: `Status changed to ${statusObj?.title || newStatus}`,
-        });
-      }
+      updateTodoStatus(todo, newStatus);
+      const statusObj = STATUSES.find((s) => s.value === newStatus);
+      await showToast({
+        style: Toast.Style.Success,
+        title: `Status changed to ${statusObj?.title || newStatus}`,
+      });
       loadTodos();
     } catch (error) {
       await showToast({
@@ -70,21 +60,12 @@ export default function ManageTasks() {
 
   async function handleSetStatus(todo: TodoItem, newStatus: TodoStatus) {
     try {
-      // If setting to "done", archive it instead
-      if (newStatus === "done") {
-        archiveCompletedTask(todo);
-        await showToast({
-          style: Toast.Style.Success,
-          title: "Task completed and archived",
-        });
-      } else {
-        updateTodoStatus(todo, newStatus);
-        const statusObj = STATUSES.find((s) => s.value === newStatus);
-        await showToast({
-          style: Toast.Style.Success,
-          title: `Status changed to ${statusObj?.title || newStatus}`,
-        });
-      }
+      updateTodoStatus(todo, newStatus);
+      const statusObj = STATUSES.find((s) => s.value === newStatus);
+      await showToast({
+        style: Toast.Style.Success,
+        title: `Status changed to ${statusObj?.title || newStatus}`,
+      });
       loadTodos();
     } catch (error) {
       await showToast({
