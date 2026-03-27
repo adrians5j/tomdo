@@ -11,6 +11,7 @@ export interface TodoItem {
   category?: string;
   completedAt?: string;
   isArchived?: boolean;
+  isInProgress?: boolean;
   modifiedAt?: string;
 }
 
@@ -61,11 +62,30 @@ export function readTodos(): TodoItem[] {
   const lines = content.split("\n");
   const todos: TodoItem[] = [];
   let inCompletedSection = false;
+  let inInProgressSection = false;
 
   lines.forEach((line, index) => {
+    // Check if we're entering the In-progress section
+    if (line.trim() === "## In-progress") {
+      inInProgressSection = true;
+      inCompletedSection = false;
+      return;
+    }
+
     // Check if we're entering the Completed section
     if (line.trim() === "## Completed") {
       inCompletedSection = true;
+      inInProgressSection = false;
+      return;
+    }
+
+    // When entering any other ## section, leave in-progress
+    if (line.trim().startsWith("## ")) {
+      inInProgressSection = false;
+    }
+
+    // Skip week sub-headers inside Completed section (e.g. ### Week 12 — 2026)
+    if (inCompletedSection && line.trim().startsWith("### ")) {
       return;
     }
 
@@ -102,6 +122,7 @@ export function readTodos(): TodoItem[] {
           completedAt,
           modifiedAt,
           isArchived: inCompletedSection,
+          isInProgress: inInProgressSection,
         });
       }
     }
@@ -111,7 +132,8 @@ export function readTodos(): TodoItem[] {
 }
 
 function parseCategory(text: string): { category?: string; text: string } {
-  const match = text.match(/^(\w+):\s*(.+)$/);
+  // Match "category(scope): text" or "category: text"
+  const match = text.match(/^(\w+)(?:\([^)]*\))?:\s*(.+)$/);
   if (match) {
     return {
       category: match[1],
@@ -130,29 +152,54 @@ function ensureCompletedSection(): void {
   }
 }
 
-export function addTodo(text: string, category?: string, status: TodoStatus = "todo"): void {
+export function addTodo(text: string, category?: string, status: TodoStatus = "todo", scope?: string): void {
   ensureTodoFileExists();
   const filePath = getTodoFilePath();
   const content = readFileSync(filePath, "utf-8");
   const lines = content.split("\n");
 
-  // Find where to insert (before ## Completed section if it exists)
+  // Find where to insert (before ## In-progress or ## Completed section if they exist)
   let insertIndex = lines.length;
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].trim() === "## Completed") {
+    if (lines[i].trim() === "## In-progress" || lines[i].trim() === "## Completed") {
       insertIndex = i;
       break;
     }
   }
 
-  const todoText = category ? `${category}: ${text}` : text;
-  const statusObj = STATUSES.find((s) => s.value === status);
-  const checkbox = statusObj ? statusObj.checkbox : "[ ]";
-  const newTodo = `- ${checkbox} ${todoText}`;
+  const categoryPrefix = category ? (scope?.trim() ? `${category}(${scope.trim()})` : category) : undefined;
+  const todoText = categoryPrefix ? `${categoryPrefix}: ${text}` : text;
+  // Always insert as [ ] first so we have a known line to hand to archiveCompletedTask
+  const newTodo = `- [ ] ${todoText}`;
 
   lines.splice(insertIndex, 0, newTodo);
   writeFileSync(filePath, lines.join("\n"), "utf-8");
   reorganizeFile();
+
+  // If the desired status is "done", find the freshly-written task and archive it
+  if (status === "done") {
+    const freshContent = readFileSync(filePath, "utf-8");
+    const freshLines = freshContent.split("\n");
+    const lineIndex = freshLines.findIndex((l) => l === newTodo);
+    if (lineIndex !== -1) {
+      archiveCompletedTask({ text: todoText, status: "todo", line: lineIndex, category });
+      return;
+    }
+  }
+
+  // For non-done statuses other than todo, update the checkbox
+  if (status !== "todo") {
+    const freshContent = readFileSync(filePath, "utf-8");
+    const freshLines = freshContent.split("\n");
+    const lineIndex = freshLines.findIndex((l) => l === newTodo);
+    if (lineIndex !== -1) {
+      const statusObj = STATUSES.find((s) => s.value === status);
+      const checkbox = statusObj ? statusObj.checkbox : "[ ]";
+      freshLines[lineIndex] = `- ${checkbox} ${todoText}`;
+      writeFileSync(filePath, freshLines.join("\n"), "utf-8");
+      reorganizeFile();
+    }
+  }
 }
 
 // Reorganize and sort the entire file
@@ -162,6 +209,7 @@ function reorganizeFile(): void {
   const lines = content.split("\n");
 
   const activeTasks: string[] = [];
+  const inProgressTasks: string[] = [];
   const completedTasks: string[] = [];
   const noLongerRelevantTasks: string[] = [];
   const rejectedTasks: string[] = [];
@@ -170,6 +218,10 @@ function reorganizeFile(): void {
   lines.forEach((line) => {
     const trimmed = line.trim();
 
+    if (trimmed === "## In-progress") {
+      currentSection = "inprogress";
+      return;
+    }
     if (trimmed === "## Completed") {
       currentSection = "completed";
       return;
@@ -182,8 +234,8 @@ function reorganizeFile(): void {
       currentSection = "rejected";
       return;
     }
-    if (trimmed.startsWith("# ")) {
-      return; // Skip header
+    if (trimmed.startsWith("# ") || trimmed.startsWith("### ")) {
+      return; // Skip headers and week sub-headers
     }
     if (trimmed === "") {
       return; // Skip empty lines
@@ -192,7 +244,14 @@ function reorganizeFile(): void {
     // Parse task lines based on current section
     if (line.match(/^- \[.\] /)) {
       if (currentSection === "active") {
-        activeTasks.push(line);
+        // In-progress tasks (- [~] ...) in the active section go to inProgressTasks
+        if (line.match(/^- \[~\] /)) {
+          inProgressTasks.push(line);
+        } else {
+          activeTasks.push(line);
+        }
+      } else if (currentSection === "inprogress") {
+        inProgressTasks.push(line);
       } else if (currentSection === "completed") {
         completedTasks.push(line);
       }
@@ -208,6 +267,9 @@ function reorganizeFile(): void {
   // Sort active tasks alphabetically
   activeTasks.sort((a, b) => a.localeCompare(b));
 
+  // Sort in-progress tasks alphabetically
+  inProgressTasks.sort((a, b) => a.localeCompare(b));
+
   // Sort completed tasks by date (newest first)
   completedTasks.sort((a, b) => {
     const dateA = a.match(/\[completed:\s*(.+?)\]/)?.[1] || "";
@@ -215,11 +277,69 @@ function reorganizeFile(): void {
     return dateB.localeCompare(dateA);
   });
 
+  // Group completed tasks by ISO week
+  function getISOWeekKey(taskLine: string): { year: number; week: number; label: string } {
+    const match = taskLine.match(/\[completed:\s*(\d{4}-\d{2}-\d{2})/);
+    if (!match) return { year: 0, week: 0, label: "Week ? — ?" };
+    const date = new Date(match[1] + "T00:00:00");
+    // ISO week: week starts Monday, week 1 contains the first Thursday
+    const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+    const day = d.getUTCDay() || 7; // make Sunday = 7
+    d.setUTCDate(d.getUTCDate() + 4 - day); // shift to Thursday of this week
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    const week = Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+    const year = d.getUTCFullYear();
+
+    // Monday of this ISO week
+    const monday = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+    monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() || 7) - 1));
+    // Sunday of this ISO week
+    const sunday = new Date(monday);
+    sunday.setUTCDate(monday.getUTCDate() + 6);
+
+    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const ordinal = (n: number) => {
+      const s = ["th", "st", "nd", "rd"];
+      const v = n % 100;
+      return n + (s[(v - 20) % 10] || s[v] || s[0]);
+    };
+
+    const monStr = `${ordinal(monday.getUTCDate())} ${monthNames[monday.getUTCMonth()]}`;
+    const sunStr = `${ordinal(sunday.getUTCDate())} ${monthNames[sunday.getUTCMonth()]}`;
+    const label = `Week ${week} — ${monStr} – ${sunStr}, ${year}`;
+
+    return { year, week, label };
+  }
+
+  // Build grouped completed section
+  const weekGroups = new Map<string, { year: number; week: number; lines: string[] }>();
+  for (const line of completedTasks) {
+    const { year, week, label } = getISOWeekKey(line);
+    if (!weekGroups.has(label)) {
+      weekGroups.set(label, { year, week, lines: [] });
+    }
+    weekGroups.get(label)!.lines.push(line);
+  }
+
+  // Sort week groups newest first
+  const sortedWeeks = [...weekGroups.entries()].sort((a, b) => {
+    const ay = a[1].year * 100 + a[1].week;
+    const by = b[1].year * 100 + b[1].week;
+    return by - ay;
+  });
+
   // Rebuild file
   const result = ["# My Todos", "", ...activeTasks];
 
+  if (inProgressTasks.length > 0) {
+    result.push("", "## In-progress", "", ...inProgressTasks);
+  }
+
   if (completedTasks.length > 0) {
-    result.push("", "## Completed", "", ...completedTasks);
+    result.push("", "## Completed");
+    for (const [label, { lines }] of sortedWeeks) {
+      result.push("", `### ${label}`, "", ...lines);
+    }
   }
 
   if (noLongerRelevantTasks.length > 0) {
@@ -234,6 +354,11 @@ function reorganizeFile(): void {
 }
 
 export function updateTodoStatus(todo: TodoItem, newStatus: TodoStatus): void {
+  if (newStatus === "done") {
+    archiveCompletedTask(todo);
+    return;
+  }
+
   const filePath = getTodoFilePath();
   const content = readFileSync(filePath, "utf-8");
   const lines = content.split("\n");
@@ -311,7 +436,7 @@ export function archiveAllCompletedTasks(): number {
   const now = new Date();
   const timestamp = now.toISOString().split("T")[0] + " " + now.toTimeString().split(" ")[0];
 
-  // Process lines before Completed section
+  // Process lines before Completed section (includes ## In-progress section)
   for (let i = 0; i < completedSectionIndex; i++) {
     const line = lines[i];
     const checkboxMatch = line.match(/^- \[(.)\] (.+)$/);
@@ -321,14 +446,16 @@ export function archiveAllCompletedTasks(): number {
       completedTasks.push(`- [x] ${checkboxMatch[2]} [completed: ${timestamp}]`);
       archivedCount++;
     } else {
+      // Preserve everything else (active tasks, ## In-progress header, in-progress tasks, etc.)
       activeTodos.push(line);
     }
   }
 
-  // Combine: active section + completed section with new tasks
+  // Combine: active/in-progress section + completed section with new tasks
   const result = [...activeTodos, "", "## Completed", "", ...completedTasks, ...lines.slice(completedSectionIndex + 1)];
 
   writeFileSync(filePath, result.join("\n"), "utf-8");
+  reorganizeFile();
   return archivedCount;
 }
 
