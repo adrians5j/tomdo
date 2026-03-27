@@ -520,3 +520,17 @@ export function markAsRejected(todo: TodoItem): void {
   writeFileSync(filePath, lines.join("\n"), "utf-8");
   reorganizeFile();
 }
+
+// Permanently delete a task from the file
+export function deleteTodo(todo: TodoItem): void {
+  ensureTodoFileExists();
+  const filePath = getTodoFilePath();
+  const content = readFileSync(filePath, "utf-8");
+  const lines = content.split("\n");
+
+  if (todo.line >= lines.length) return;
+
+  lines.splice(todo.line, 1);
+  writeFileSync(filePath, lines.join("\n"), "utf-8");
+  reorganizeFile();
+}

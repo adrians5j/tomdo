@@ -8,6 +8,7 @@ import {
   archiveAllCompletedTasks,
   markAsNoLongerRelevant,
   markAsRejected,
+  deleteTodo,
   addTodo,
   TodoItem,
   CATEGORIES,
@@ -157,6 +158,31 @@ export default function ManageTasks() {
     }
   }
 
+  async function handleDelete(todo: TodoItem) {
+    const confirmed = await confirmAlert({
+      title: "Delete Task?",
+      message: `"${todo.text}" will be permanently removed.`,
+      primaryAction: {
+        title: "Delete",
+        style: Alert.ActionStyle.Destructive,
+      },
+    });
+
+    if (!confirmed) return;
+
+    try {
+      deleteTodo(todo);
+      await showToast({ style: Toast.Style.Success, title: "Task deleted" });
+      loadTodos();
+    } catch (error) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Failed to delete task",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   function getStatusIcon(status: TodoStatus): Icon {
     switch (status) {
       case "done":
@@ -301,6 +327,15 @@ export default function ManageTasks() {
                 />
               </ActionPanel.Section>
             )}
+            <ActionPanel.Section>
+              <Action
+                title="Delete Task"
+                icon={Icon.Trash}
+                style={Action.Style.Destructive}
+                shortcut={{ modifiers: ["cmd"], key: "k" }}
+                onAction={() => handleDelete(todo)}
+              />
+            </ActionPanel.Section>
           </ActionPanel>
         }
       />
