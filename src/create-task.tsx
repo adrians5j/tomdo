@@ -15,6 +15,15 @@ export default function CreateTask() {
   const [scope, setScope] = useState<string>("");
   const [status, setStatus] = useState<string>("todo");
 
+  function handleDescriptionChange(value: string) {
+    setDescription(value);
+    const validCategories = CATEGORIES.map((c) => c.value);
+    const match = value.match(/^(\w+):/);
+    if (match && validCategories.includes(match[1])) {
+      setCategory(match[1]);
+    }
+  }
+
   async function handleSubmit(values: FormValues) {
     const trimmed = values.description.trim();
 
@@ -57,7 +66,7 @@ export default function CreateTask() {
         title="Description"
         placeholder="e.g., broken header alignment"
         value={description}
-        onChange={setDescription}
+        onChange={handleDescriptionChange}
         autoFocus
       />
       <Form.Dropdown id="category" title="Category" value={category} onChange={setCategory}>
