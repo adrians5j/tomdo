@@ -3,11 +3,12 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import {
   readTodos,
   updateTodoStatus,
-  cycleStatus,
   archiveCompletedTask,
   archiveAllCompletedTasks,
   markAsNoLongerRelevant,
   markAsRejected,
+  markAsDuplicate,
+  markAsCouldNotReproduce,
   deleteTodo,
   addTodo,
   TodoItem,
@@ -39,25 +40,6 @@ export default function ManageTasks() {
   useEffect(() => {
     loadTodos();
   }, []);
-
-  async function handleCycleStatus(todo: TodoItem) {
-    try {
-      const newStatus = cycleStatus(todo.status);
-      updateTodoStatus(todo, newStatus);
-      const statusObj = STATUSES.find((s) => s.value === newStatus);
-      await showToast({
-        style: Toast.Style.Success,
-        title: `Status changed to ${statusObj?.title || newStatus}`,
-      });
-      loadTodos();
-    } catch (error) {
-      await showToast({
-        style: Toast.Style.Failure,
-        title: "Failed to update status",
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
 
   async function handleSetStatus(todo: TodoItem, newStatus: TodoStatus) {
     try {
@@ -141,6 +123,40 @@ export default function ManageTasks() {
     }
   }
 
+  async function handleDuplicate(todo: TodoItem) {
+    try {
+      markAsDuplicate(todo);
+      await showToast({
+        style: Toast.Style.Success,
+        title: "Marked as duplicate",
+      });
+      loadTodos();
+    } catch (error) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Failed to move task",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  async function handleCouldNotReproduce(todo: TodoItem) {
+    try {
+      markAsCouldNotReproduce(todo);
+      await showToast({
+        style: Toast.Style.Success,
+        title: "Marked as could not reproduce",
+      });
+      loadTodos();
+    } catch (error) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Failed to move task",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   async function handleRejected(todo: TodoItem) {
     try {
       markAsRejected(todo);
@@ -189,6 +205,8 @@ export default function ManageTasks() {
         return Icon.CheckCircle;
       case "in_progress":
         return Icon.CircleProgress;
+      case "next":
+        return Icon.ArrowRight;
       case "blocked":
         return Icon.XMarkCircle;
       default:
@@ -219,6 +237,7 @@ export default function ManageTasks() {
   const groupedByStatus = useMemo(() => {
     const groups: Record<string, TodoItem[]> = {
       in_progress: [],
+      next: [],
       todo: [],
       blocked: [],
       done: [],
@@ -239,19 +258,20 @@ export default function ManageTasks() {
   function renderTodoItem(todo: TodoItem, key: string) {
     const categoryObj = CATEGORIES.find((cat) => cat.value === todo.category);
     const statusObj = STATUSES.find((s) => s.value === todo.status);
+    const displayTitle = todo.link ? todo.text.replace(/\s*\[link:\s*.+?\]$/, "") : todo.text;
 
     return (
       <List.Item
         key={key}
         icon={getStatusIcon(todo.status)}
-        title={todo.text}
+        title={displayTitle}
         accessories={showingDetail ? [] : [{ text: getStatusText(todo.status) }]}
         detail={
           showingDetail ? (
             <List.Item.Detail
               metadata={
                 <List.Item.Detail.Metadata>
-                  <List.Item.Detail.Metadata.Label title="Task" text={todo.text} />
+                  <List.Item.Detail.Metadata.Label title="Task" text={displayTitle} />
                   <List.Item.Detail.Metadata.Separator />
                   <List.Item.Detail.Metadata.Label
                     title="Status"
@@ -263,6 +283,9 @@ export default function ManageTasks() {
                     text={categoryObj?.title || todo.category || "No Category"}
                     icon={todo.category ? "📁" : undefined}
                   />
+                  {todo.link && (
+                    <List.Item.Detail.Metadata.Link title="Link" target={todo.link} text={todo.link} />
+                  )}
                   {todo.modifiedAt && (
                     <List.Item.Detail.Metadata.Label title="Last Modified" text={todo.modifiedAt} icon="🕐" />
                   )}
@@ -280,9 +303,15 @@ export default function ManageTasks() {
         }
         actions={
           <ActionPanel>
+            {todo.link && (
+              <Action.OpenInBrowser
+                title="Open Link"
+                url={todo.link}
+                shortcut={{ modifiers: ["cmd"], key: "o" }}
+              />
+            )}
             {!todo.isArchived && (
               <>
-                <Action title="Cycle Status (Todo → In Progress → Done)" onAction={() => handleCycleStatus(todo)} />
                 {todo.status === "done" && (
                   <Action
                     title="Archive Task"
@@ -315,6 +344,8 @@ export default function ManageTasks() {
                   onAction={() => handleNoLongerRelevant(todo)}
                 />
                 <Action title="Set as Rejected" icon={Icon.XMarkCircle} onAction={() => handleRejected(todo)} />
+                <Action title="Set as Duplicate" icon={Icon.TwoPeople} onAction={() => handleDuplicate(todo)} />
+                <Action title="Set as Could Not Reproduce" icon={Icon.QuestionMarkCircle} onAction={() => handleCouldNotReproduce(todo)} />
               </ActionPanel.Section>
             )}
             {!todo.isArchived && completedTasks > 0 && (
@@ -354,6 +385,13 @@ export default function ManageTasks() {
       {groupedByStatus.in_progress.length > 0 && (
         <List.Section title="🔄 In Progress" subtitle={`${groupedByStatus.in_progress.length}`}>
           {groupedByStatus.in_progress.map((todo, index) => renderTodoItem(todo, `in-progress-${index}`))}
+        </List.Section>
+      )}
+
+      {/* Next */}
+      {groupedByStatus.next.length > 0 && (
+        <List.Section title="▶️ Next" subtitle={`${groupedByStatus.next.length}`}>
+          {groupedByStatus.next.map((todo, index) => renderTodoItem(todo, `next-${index}`))}
         </List.Section>
       )}
 

@@ -7,6 +7,7 @@ interface FormValues {
   category: string;
   scope: string;
   status: string;
+  link: string;
 }
 
 export default function CreateTask() {
@@ -14,6 +15,7 @@ export default function CreateTask() {
   const [category, setCategory] = useState<string>("feat");
   const [scope, setScope] = useState<string>("");
   const [status, setStatus] = useState<string>("todo");
+  const [link, setLink] = useState<string>("");
 
   function handleDescriptionChange(value: string) {
     setDescription(value);
@@ -25,7 +27,18 @@ export default function CreateTask() {
   }
 
   async function handleSubmit(values: FormValues) {
-    const trimmed = values.description.trim();
+    let trimmed = values.description.trim();
+
+    if (!trimmed) {
+      await showToast({ style: Toast.Style.Failure, title: "Task description cannot be empty" });
+      return;
+    }
+
+    // Strip leading "category:" prefix if the user typed it directly (e.g. "feat:xyz")
+    const prefixMatch = trimmed.match(/^(\w+):\s*/);
+    if (prefixMatch && prefixMatch[1] === values.category) {
+      trimmed = trimmed.slice(prefixMatch[0].length).trim();
+    }
 
     if (!trimmed) {
       await showToast({ style: Toast.Style.Failure, title: "Task description cannot be empty" });
@@ -33,7 +46,7 @@ export default function CreateTask() {
     }
 
     try {
-      addTodo(trimmed, values.category, values.status as TodoStatus, values.scope.trim() || undefined);
+      addTodo(trimmed, values.category, values.status as TodoStatus, values.scope.trim() || undefined, values.link.trim() || undefined);
 
       const scopePart = values.scope.trim() ? `(${values.scope.trim()})` : "";
       await showToast({
@@ -86,6 +99,13 @@ export default function CreateTask() {
           <Form.Dropdown.Item key={s.value} value={s.value} title={s.title} icon={s.icon} />
         ))}
       </Form.Dropdown>
+      <Form.TextField
+        id="link"
+        title="Link"
+        placeholder="https://... (optional)"
+        value={link}
+        onChange={setLink}
+      />
     </Form>
   );
 }

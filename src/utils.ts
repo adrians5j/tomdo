@@ -2,7 +2,7 @@ import { homedir } from "os";
 import { join } from "path";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 
-export type TodoStatus = "todo" | "in_progress" | "done" | "blocked";
+export type TodoStatus = "todo" | "next" | "in_progress" | "done" | "blocked";
 
 export interface TodoItem {
   text: string;
@@ -12,12 +12,15 @@ export interface TodoItem {
   completedAt?: string;
   isArchived?: boolean;
   isInProgress?: boolean;
+  isNext?: boolean;
   modifiedAt?: string;
+  link?: string;
 }
 
 // Task statuses with GitHub-style checkboxes
 export const STATUSES = [
   { value: "todo" as TodoStatus, title: "Todo", checkbox: "[ ]", icon: "⭕" },
+  { value: "next" as TodoStatus, title: "Next", checkbox: "[>]", icon: "▶️" },
   { value: "in_progress" as TodoStatus, title: "In Progress", checkbox: "[~]", icon: "🔄" },
   { value: "done" as TodoStatus, title: "Done", checkbox: "[x]", icon: "✅" },
   { value: "blocked" as TodoStatus, title: "Blocked", checkbox: "[-]", icon: "🚫" },
@@ -63,11 +66,21 @@ export function readTodos(): TodoItem[] {
   const todos: TodoItem[] = [];
   let inCompletedSection = false;
   let inInProgressSection = false;
+  let inNextSection = false;
 
   lines.forEach((line, index) => {
+    // Check if we're entering the Next section
+    if (line.trim() === "## Next") {
+      inNextSection = true;
+      inInProgressSection = false;
+      inCompletedSection = false;
+      return;
+    }
+
     // Check if we're entering the In-progress section
     if (line.trim() === "## In-progress") {
       inInProgressSection = true;
+      inNextSection = false;
       inCompletedSection = false;
       return;
     }
@@ -75,12 +88,14 @@ export function readTodos(): TodoItem[] {
     // Check if we're entering the Completed section
     if (line.trim() === "## Completed") {
       inCompletedSection = true;
+      inNextSection = false;
       inInProgressSection = false;
       return;
     }
 
-    // When entering any other ## section, leave in-progress
+    // When entering any other ## section, clear sub-section flags
     if (line.trim().startsWith("## ")) {
+      inNextSection = false;
       inInProgressSection = false;
     }
 
@@ -97,6 +112,8 @@ export function readTodos(): TodoItem[] {
       const fullText = checkboxMatch[2];
       const completedAt = checkboxMatch[3];
       const modifiedAt = checkboxMatch[4];
+      const linkMatch = fullText.match(/\s*\[link:\s*(.+?)\]$/);
+      const link = linkMatch ? linkMatch[1].trim() : undefined;
       const { category } = parseCategory(fullText);
 
       // Determine status based on checkbox character
@@ -105,11 +122,16 @@ export function readTodos(): TodoItem[] {
         status = "done";
       } else if (checkboxChar === "~") {
         status = "in_progress";
+      } else if (checkboxChar === ">") {
+        status = "next";
       } else if (checkboxChar === "-") {
         status = "blocked";
       } else {
         status = "todo";
       }
+
+      // Tasks in ## Next section are also "next" regardless of checkbox
+      if (inNextSection && status === "todo") status = "next";
 
       // Only include tasks that have a valid category
       const validCategories = CATEGORIES.map((c) => c.value);
@@ -123,6 +145,8 @@ export function readTodos(): TodoItem[] {
           modifiedAt,
           isArchived: inCompletedSection,
           isInProgress: inInProgressSection,
+          isNext: inNextSection,
+          link,
         });
       }
     }
@@ -152,25 +176,26 @@ function ensureCompletedSection(): void {
   }
 }
 
-export function addTodo(text: string, category?: string, status: TodoStatus = "todo", scope?: string): void {
+export function addTodo(text: string, category?: string, status: TodoStatus = "todo", scope?: string, link?: string): void {
   ensureTodoFileExists();
   const filePath = getTodoFilePath();
   const content = readFileSync(filePath, "utf-8");
   const lines = content.split("\n");
 
-  // Find where to insert (before ## In-progress or ## Completed section if they exist)
+  // Find where to insert (before ## Next / ## In-progress / ## Completed section if they exist)
   let insertIndex = lines.length;
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].trim() === "## In-progress" || lines[i].trim() === "## Completed") {
+    if (lines[i].trim() === "## Next" || lines[i].trim() === "## In-progress" || lines[i].trim() === "## Completed") {
       insertIndex = i;
       break;
     }
   }
 
   const categoryPrefix = category ? (scope?.trim() ? `${category}(${scope.trim()})` : category) : undefined;
-  const todoText = categoryPrefix ? `${categoryPrefix}: ${text}` : text;
+  const todoText = categoryPrefix ? `${categoryPrefix}:${text}` : text;
+  const linkSuffix = link?.trim() ? ` [link: ${link.trim()}]` : "";
   // Always insert as [ ] first so we have a known line to hand to archiveCompletedTask
-  const newTodo = `- [ ] ${todoText}`;
+  const newTodo = `- [ ] ${todoText}${linkSuffix}`;
 
   lines.splice(insertIndex, 0, newTodo);
   writeFileSync(filePath, lines.join("\n"), "utf-8");
@@ -209,15 +234,22 @@ function reorganizeFile(): void {
   const lines = content.split("\n");
 
   const activeTasks: string[] = [];
+  const nextTasks: string[] = [];
   const inProgressTasks: string[] = [];
   const completedTasks: string[] = [];
   const noLongerRelevantTasks: string[] = [];
   const rejectedTasks: string[] = [];
+  const duplicateTasks: string[] = [];
+  const couldNotReproduceTasks: string[] = [];
   let currentSection = "active";
 
   lines.forEach((line) => {
     const trimmed = line.trim();
 
+    if (trimmed === "## Next") {
+      currentSection = "next";
+      return;
+    }
     if (trimmed === "## In-progress") {
       currentSection = "inprogress";
       return;
@@ -234,6 +266,14 @@ function reorganizeFile(): void {
       currentSection = "rejected";
       return;
     }
+    if (trimmed === "## Duplicate") {
+      currentSection = "duplicate";
+      return;
+    }
+    if (trimmed === "## Could Not Reproduce") {
+      currentSection = "couldnotreproduce";
+      return;
+    }
     if (trimmed.startsWith("# ") || trimmed.startsWith("### ")) {
       return; // Skip headers and week sub-headers
     }
@@ -243,15 +283,14 @@ function reorganizeFile(): void {
 
     // Parse task lines based on current section
     if (line.match(/^- \[.\] /)) {
-      if (currentSection === "active") {
-        // In-progress tasks (- [~] ...) in the active section go to inProgressTasks
-        if (line.match(/^- \[~\] /)) {
+      if (currentSection === "active" || currentSection === "next" || currentSection === "inprogress") {
+        if (line.match(/^- \[>\] /)) {
+          nextTasks.push(line);
+        } else if (line.match(/^- \[~\] /)) {
           inProgressTasks.push(line);
         } else {
           activeTasks.push(line);
         }
-      } else if (currentSection === "inprogress") {
-        inProgressTasks.push(line);
       } else if (currentSection === "completed") {
         completedTasks.push(line);
       }
@@ -260,12 +299,19 @@ function reorganizeFile(): void {
         noLongerRelevantTasks.push(line);
       } else if (currentSection === "rejected") {
         rejectedTasks.push(line);
+      } else if (currentSection === "duplicate") {
+        duplicateTasks.push(line);
+      } else if (currentSection === "couldnotreproduce") {
+        couldNotReproduceTasks.push(line);
       }
     }
   });
 
   // Sort active tasks alphabetically
   activeTasks.sort((a, b) => a.localeCompare(b));
+
+  // Sort next tasks alphabetically
+  nextTasks.sort((a, b) => a.localeCompare(b));
 
   // Sort in-progress tasks alphabetically
   inProgressTasks.sort((a, b) => a.localeCompare(b));
@@ -331,6 +377,10 @@ function reorganizeFile(): void {
   // Rebuild file
   const result = ["# My Todos", "", ...activeTasks];
 
+  if (nextTasks.length > 0) {
+    result.push("", "## Next", "", ...nextTasks);
+  }
+
   if (inProgressTasks.length > 0) {
     result.push("", "## In-progress", "", ...inProgressTasks);
   }
@@ -348,6 +398,14 @@ function reorganizeFile(): void {
 
   if (rejectedTasks.length > 0) {
     result.push("", "## Rejected", "", ...rejectedTasks);
+  }
+
+  if (duplicateTasks.length > 0) {
+    result.push("", "## Duplicate", "", ...duplicateTasks);
+  }
+
+  if (couldNotReproduceTasks.length > 0) {
+    result.push("", "## Could Not Reproduce", "", ...couldNotReproduceTasks);
   }
 
   writeFileSync(filePath, result.join("\n"), "utf-8");
@@ -372,9 +430,9 @@ export function updateTodoStatus(todo: TodoItem, newStatus: TodoStatus): void {
   }
 }
 
-// Cycle through statuses: todo -> in_progress -> done -> todo
+// Cycle through statuses: todo -> next -> in_progress -> done -> todo
 export function cycleStatus(currentStatus: TodoStatus): TodoStatus {
-  const statusOrder: TodoStatus[] = ["todo", "in_progress", "done"];
+  const statusOrder: TodoStatus[] = ["todo", "next", "in_progress", "done"];
   const currentIndex = statusOrder.indexOf(currentStatus);
   const nextIndex = (currentIndex + 1) % statusOrder.length;
   return statusOrder[nextIndex];
@@ -480,6 +538,64 @@ export function markAsNoLongerRelevant(todo: TodoItem): void {
   }
 
   // Insert after the section header
+  let insertIndex = sectionIndex + 1;
+  while (insertIndex < lines.length && lines[insertIndex].trim() === "") {
+    insertIndex++;
+  }
+
+  lines.splice(insertIndex, 0, `- ${todo.text}`);
+  writeFileSync(filePath, lines.join("\n"), "utf-8");
+  reorganizeFile();
+}
+
+// Move task to "Duplicate" section
+export function markAsDuplicate(todo: TodoItem): void {
+  ensureTodoFileExists();
+  const filePath = getTodoFilePath();
+  const content = readFileSync(filePath, "utf-8");
+  const lines = content.split("\n");
+
+  if (todo.line >= lines.length) return;
+
+  // Remove from current position
+  lines.splice(todo.line, 1);
+
+  // Ensure "Duplicate" section exists
+  let sectionIndex = lines.findIndex((line) => line.trim() === "## Duplicate");
+  if (sectionIndex === -1) {
+    // Add section at the end
+    lines.push("", "## Duplicate", "");
+    sectionIndex = lines.length - 1;
+  }
+
+  // Insert after the section header
+  let insertIndex = sectionIndex + 1;
+  while (insertIndex < lines.length && lines[insertIndex].trim() === "") {
+    insertIndex++;
+  }
+
+  lines.splice(insertIndex, 0, `- ${todo.text}`);
+  writeFileSync(filePath, lines.join("\n"), "utf-8");
+  reorganizeFile();
+}
+
+// Move task to "Could Not Reproduce" section
+export function markAsCouldNotReproduce(todo: TodoItem): void {
+  ensureTodoFileExists();
+  const filePath = getTodoFilePath();
+  const content = readFileSync(filePath, "utf-8");
+  const lines = content.split("\n");
+
+  if (todo.line >= lines.length) return;
+
+  lines.splice(todo.line, 1);
+
+  let sectionIndex = lines.findIndex((line) => line.trim() === "## Could Not Reproduce");
+  if (sectionIndex === -1) {
+    lines.push("", "## Could Not Reproduce", "");
+    sectionIndex = lines.length - 1;
+  }
+
   let insertIndex = sectionIndex + 1;
   while (insertIndex < lines.length && lines[insertIndex].trim() === "") {
     insertIndex++;
