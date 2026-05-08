@@ -1,4 +1,4 @@
-# mdtodo
+# tomdo
 
 A [Raycast](https://raycast.com) extension for managing todos stored in a plain markdown file (`~/Desktop/todos.md`).
 

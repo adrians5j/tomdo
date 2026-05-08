@@ -1,3 +1,3 @@
-# mdtodo Changelog
+# tomdo Changelog
 
 ## [Initial Version] - {PR_MERGE_DATE}
